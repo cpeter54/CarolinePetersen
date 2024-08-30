@@ -1,0 +1,145 @@
+/**
+ * Function to mask clouds using the Sentinel-2 QA band
+ * @param {ee.Image} image Sentinel-2 image
+ * @return {ee.Image} cloud masked Sentinel-2 image
+ */
+function maskS2clouds(image) {
+  var qa = image.select('QA60');
+
+  // Bits 10 and 11 are clouds and cirrus, respectively.
+  var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+
+  // Both flags should be set to zero, indicating clear conditions.
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0)
+      .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+
+  return image.updateMask(mask).divide(10000);
+}
+
+var dataset = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+                  .filterDate('2020-05-01', '2020-07-30')
+                  // Pre-filter to get less cloudy granules.
+                  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE',10))
+                  .map(maskS2clouds);
+
+var visualization = {
+  min: 0.0,
+  max: 0.3,
+  bands: ['B4', 'B3', 'B2'],
+};
+
+Map.setCenter( -83.93077560689586,35.962846411107286, 12);
+
+Map.addLayer(dataset.mean(), visualization, 'RGB');
+
+// Function to compute NDVI
+var addNDVI = function(image) {
+  var ndvi = image.normalizedDifference(['B8', 'B4'])
+                .rename('NDVI');
+  return image.addBands(ndvi);
+};
+
+// Apply the function to each image in the collection
+var ndviCollection = dataset.map(addNDVI);
+
+// Select only the NDVI bands
+var ndvi = ndviCollection.select('NDVI');
+
+// Define NDVI visualization parameters
+var ndviParams = {
+  min: -1,
+  max: 1,
+  palette: ['blue', 'white', 'green']
+};
+
+// Add NDVI layer to the map
+Map.addLayer(ndvi.mean(), ndviParams, 'NDVI Image');
+
+var roiCoordinates = [
+  [-84.07633585467549, 35.923874385425734],
+  [-84.06020393266161, 35.88133679670999],
+  [-84.02655928728564, 35.89580543574458],
+  [-83.98879279984911, 35.90914904018519],
+  [-83.94428905152111, 35.92782554743718],
+  [-83.93549269661138, 35.913130445585445],
+  [-83.91240318425992, 35.9215463950448],
+  [-83.89095227420067, 35.907228841648696],
+  [-83.8645260594692, 35.91417202636416],
+  [-83.87516161669167, 35.940569247625305],
+  [-83.85833015336473, 35.95473996238207],
+  [-83.84254640501653, 35.98918496595767],
+  [-83.81851090543358, 36.00918015719219],
+  [-83.83910407914598, 36.04584289910771],
+  [-83.86416485979974, 36.03808307435089],
+  [-83.88373500087589, 36.05474775737822],
+  [-83.90948289757387, 36.0436349938874],
+  [-83.92699470414598, 36.0680471580724],
+  [-83.98865319626044, 36.0384913394067],
+  [-84.03516642023943, 36.01224564675327],
+  [-84.06176746303278, 35.98988669550704],
+  [-84.07599677934131, 35.966411457085286],
+  [-84.07633585467549, 35.923874385425734]
+];
+
+var roi = ee.Geometry.Polygon(roiCoordinates); // Create a polygon geometry using the coordinates
+
+// Compute mean NDVI within the ROI
+var meanNDVI = ndvi.mean().reduceRegion({
+  reducer: ee.Reducer.mean(),
+  geometry: roi,
+  scale: 10 // Adjust scale according to your preference
+});
+
+// Print the mean NDVI
+print('Mean NDVI within ROI:', meanNDVI.get('NDVI'));
+
+// Function to create and add a legend
+function addLegend(title, palette, min, max) {
+  var legend = ui.Panel({
+    style: {
+      position: 'bottom-right',
+      padding: '8px 15px'
+    }
+  });
+
+  var legendTitle = ui.Label({
+    value: title,
+    style: {fontWeight: 'bold', fontSize: '14px', margin: '0 0 4px 0'}
+  });
+
+  legend.add(legendTitle);
+
+  var makeColorBar = function(palette) {
+    return ui.Thumbnail({
+      image: ee.Image.pixelLonLat().select(0),
+      params: {
+        bbox: [0, 0, 1, 0.1],
+        dimensions: '100x8',
+        format: 'png',
+        min: 0,
+        max: 1,
+        palette: palette,
+      },
+      style: {stretch: 'horizontal', margin: '0px 8px'}
+    });
+  };
+
+  var colorBar = makeColorBar(palette);
+  legend.add(colorBar);
+
+  var legendLabels = ui.Panel({
+    widgets: [
+      ui.Label(min, {margin: '4px 8px'}),
+      ui.Label((min + max) / 2, {margin: '4px 8px', textAlign: 'center', stretch: 'horizontal'}),
+      ui.Label(max, {margin: '4px 8px'})
+    ],
+    layout: ui.Panel.Layout.flow('horizontal')
+  });
+
+  legend.add(legendLabels);
+  Map.add(legend);
+}
+
+// Add NDVI legend to the map
+addLegend('NDVI', ['blue', 'white', 'green'], -1, 1);
